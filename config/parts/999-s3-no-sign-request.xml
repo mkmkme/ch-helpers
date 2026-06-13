@@ -1,0 +1,5 @@
+<clickhouse>
+    <s3>
+        <no_sign_request>true</no_sign_request>
+    </s3>
+</clickhouse>

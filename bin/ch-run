@@ -1,0 +1,65 @@
+#!/bin/bash
+set -euo pipefail
+
+function is_pwd_a_git_repo() {
+    git rev-parse --is-inside-work-tree 2>/dev/null >/dev/null
+}
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONFIG="$ROOT/config/config.xml"
+
+binary="${CH_BINARY:-}"
+binary_infix="build"
+datadir=""
+tmp=0
+use_local=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -b|--binary)    binary="$2"; shift 2 ;;
+    -d|--datadir)   datadir="$2"; shift 2 ;;
+    -t|--tmp)       tmp=1; shift ;;
+    -l|--local)     use_local=1; shift ;;
+    --release)      binary_infix="build-release"; shift ;;
+    --asan)         binary_infix="build-asan"; shift ;;
+    --ubsan)        binary_infix="build-ubsan"; shift ;;
+    --tsan)         binary_infix="build-tsan"; shift ;;
+    --msan)         binary_infix="build-msan"; shift ;;
+    --)             shift; break ;;
+    *)              break ;;
+  esac
+done
+
+if [[ $tmp -eq 1 ]]; then
+    tmpbase="${TMPDIR:-/tmp}"
+    mkdir -p "$tmpbase"
+    datadir="$(mktemp -d "$tmpbase/chrun-XXXXXX")"
+    echo "tmp data dir: $datadir" >&2
+elif [[ $use_local -eq 1 ]]; then
+    datadir="$(pwd)/chrun"
+    echo "using local dir: $datadir" >&2
+elif [[ -z $datadir ]]; then
+    datadir="$HOME/.clickhouse-server/shared"
+    echo "using shared dir: $datadir" >&2
+fi
+mkdir -p "$datadir"
+
+if [[ -z "$binary" ]]; then
+    if is_pwd_a_git_repo; then
+        binary="$(git rev-parse --show-toplevel 2>/dev/null)/${binary_infix}/programs/clickhouse"
+    else
+        echo "!! ClickHouse binary not found, provide one with -b/--binary or run from a git repo" >&2
+        exit 1
+    fi
+fi
+
+if [[ ! -x "$binary" ]]; then
+    echo "!! ClickHouse binary not executable: $binary" >&2
+    exit 1
+fi
+
+if [[ $tmp -eq 1 ]]; then
+    trap 'rm -rf "$datadir"; echo "removed tmp data dir: $datadir" >&2' EXIT
+fi
+
+CLICKHOUSE_DATA_PATH="$datadir" "$binary" server --config-file="$CONFIG" "$@"

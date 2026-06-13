@@ -1,0 +1,16 @@
+<clickhouse>
+    <http_port>8123</http_port>
+    <tcp_port>9000</tcp_port>
+    <mysql_port>9004</mysql_port>
+    <postgresql_port>9005</postgresql_port>
+    <interserver_http_port>9009</interserver_http_port>
+
+    <mlock_executable>true</mlock_executable>
+
+    <path from_env="CLICKHOUSE_DATA_PATH"/>
+
+    <user_directories>
+        <users_xml><path>users.xml</path></users_xml>
+        <memory/>
+    </user_directories>
+</clickhouse>

@@ -1,0 +1,6 @@
+<clickhouse>
+    <logger>
+        <level>trace</level>
+        <console>true</console>
+    </logger>
+</clickhouse>
