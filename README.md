@@ -64,4 +64,28 @@ Default ClickHouse binary is `$CWD/build/programs/clickhouse`.
 
 ## chbuild.sh
 
-TBD
+This is the script I use to build ClickHouse. It's a wrapper around the `cmake`
+command that I use to build ClickHouse. It's also a wrapper around the `sccache`
+command that I use to cache the build.
+
+### Examples
+
+`chbuild.sh` will build the ClickHouse server with the default settings.  
+
+`chbuild.sh --release` will build the ClickHouse server with the release build.  
+`chbuild.sh --asan` will build the ClickHouse server with the ASAN build.  
+`chbuild.sh --ubsan` will build the ClickHouse server with the UBSAN build.  
+`chbuild.sh --tsan` will build the ClickHouse server with the TSAN build.
+
+`chbuild.sh --clang-version 21` will build the ClickHouse server with the Clang 21 compiler.
+
+`chbuild.sh --no-rust` will build the ClickHouse server without the Rust dependencies.
+
+`chbuild.sh --clean` will clean the build directory before building.
+
+`chbuild.sh --configure` will configure the build directory without building.  
+`chbuild.sh --reconfigure` will reconfigure the build directory if it already exists.
+
+`chbuild.sh --cmake-compat` will set the CMAKE_POLICY_VERSION_MINIMUM to 3.5 (for old versions).
+
+`chbuild.sh --dry-run` will print the commands that would be executed without executing them.
