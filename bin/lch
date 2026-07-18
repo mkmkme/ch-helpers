@@ -1,0 +1,1 @@
+exec $(git rev-parse --show-toplevel)/build/programs/clickhouse-local "$@"
