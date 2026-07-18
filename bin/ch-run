@@ -36,7 +36,7 @@ if [[ $tmp -eq 1 ]]; then
     datadir="$(mktemp -d "$tmpbase/chrun-XXXXXX")"
     echo "tmp data dir: $datadir" >&2
 elif [[ $use_local -eq 1 ]]; then
-    datadir="$(pwd)/chrun"
+    datadir="$(pwd)/local-chrun"
     echo "using local dir: $datadir" >&2
 elif [[ -z $datadir ]]; then
     datadir="$HOME/.clickhouse-server/shared"
