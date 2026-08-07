@@ -26,9 +26,16 @@ and `config/users.d` directory for enabled users.
 So will `ch-conf enable 10` or `ch-conf enable local-remote-replica`.  
 `ch-conf disable 10-local-remote-replica` will disable the part `10-local-remote-replica`.
 
+`ch-conf show 10-local-remote-replica` will print the contents of the part
+`10-local-remote-replica`. So will `ch-conf show 10`.  
+`ch-conf show` without a name will print the base `config/config.xml`.
+
 `ch-conf user-list` will list all available users and their status.  
 `ch-conf user-enable 10-mikhail` will enable the user `mikhail.lomonosov` that
-is defined in the part `10-mikhail.xml`. So will `ch-conf user-enable 10`.
+is defined in the part `10-mikhail.xml`. So will `ch-conf user-enable 10`.  
+`ch-conf user-show 10-mikhail` will print the contents of the user part
+`10-mikhail.xml`, and `ch-conf user-show` without a name will print the base
+`config/users.xml`.
 
 ## `ch-run`
 

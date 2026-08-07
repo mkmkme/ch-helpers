@@ -7,12 +7,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CFGROOT="$ROOT/config"
 PARTS="$CFGROOT/parts"
 CONFD="$CFGROOT/config.d"
+CONFIG_XML="$CFGROOT/config.xml"
 USERS_AVAIL="$CFGROOT/users-available"
 USERS_D="$CFGROOT/users.d"
+USERS_XML="$CFGROOT/users.xml"
 
 usage() {
-    echo "usage: ch-conf {list|enable|disable} [name...]"
-    echo "       ch-conf {user-list|user-enable|user-disable} [name...]"
+    echo "usage: ch-conf {list|enable|disable|show} [name...]"
+    echo "       ch-conf {user-list|user-enable|user-disable|user-show} [name...]"
     exit "${1:-0}"
 }
 
@@ -52,11 +54,24 @@ toggle() {
     esac
 }
 
+# show <base_file> <available_dir> [name...]
+show() {
+    local base="$1" avail="$2"; shift 2
+    [[ $# -gt 0 ]] || { cat "$base"; return; }
+    for arg in "$@"; do
+        local matches=("$avail"/*"$arg"*.xml)
+        [[ ${#matches[@]} -gt 0 ]] || { echo "no match for '$arg'" >&2; exit 1; }
+        cat "${matches[@]}"
+    done
+}
+
 cmd="${1:-list}"; shift || true
 
 case "$cmd" in
   list|enable|disable)                 toggle "$cmd"           "$PARTS"       "$CONFD"  "$@" ;;
   user-list|user-enable|user-disable)  toggle "${cmd#user-}"   "$USERS_AVAIL" "$USERS_D" "$@" ;;
+  show)                                show "$CONFIG_XML" "$PARTS"       "$@" ;;
+  user-show)                           show "$USERS_XML"  "$USERS_AVAIL" "$@" ;;
   -h|--help)                           usage 0 ;;
   *)                                   usage 1 ;;
 esac
