@@ -1,0 +1,19 @@
+<clickhouse>
+    <tcp_port_secure>9440</tcp_port_secure>
+
+    <openSSL>
+        <server>
+            <certificateFile>@@CONFIG_DIR@@/server.crt</certificateFile>
+            <privateKeyFile>@@CONFIG_DIR@@/server.key</privateKeyFile>
+            <dhParamsFile>@@CONFIG_DIR@@/dhparam.pem</dhParamsFile>
+            <verificationMode>none</verificationMode>
+        </server>
+        <client>
+            <!-- The certificate above is self-signed, so accept it when the server
+                 connects to itself, e.g. via remoteSecure(). -->
+            <invalidCertificateHandler>
+                <name>AcceptCertificateHandler</name>
+            </invalidCertificateHandler>
+        </client>
+    </openSSL>
+</clickhouse>
