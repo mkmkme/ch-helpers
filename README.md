@@ -16,6 +16,11 @@ server.
 `ch-conf` is used to enable/disable parts of the config via creating or removing
 symlinks in the `config/config.d` directory.
 
+Part can be a template if it ends with `.xml.in`. In such case, it can contain
+variables in format `@@VARIABLE_NAME@@` that will be expanded during enable. For
+now, only `@@CONFIG_DIR@@` is supported. Templates are written as plain files
+rather than symlinks, so re-enable a template after editing it.
+
 Similarly, there's a `config/users-available` directory with user configurations
 and `config/users.d` directory for enabled users.
 
