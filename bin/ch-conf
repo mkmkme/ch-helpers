@@ -13,8 +13,8 @@ USERS_D="$CFGROOT/users.d"
 USERS_XML="$CFGROOT/users.xml"
 
 usage() {
-    echo "usage: ch-conf {list|enable|disable|show} [name...]"
-    echo "       ch-conf {user-list|user-enable|user-disable|user-show} [name...]"
+    echo "usage: ch-conf {list|enable|disable|show|edit} [name...]"
+    echo "       ch-conf {user-list|user-enable|user-disable|user-show|user-edit} [name...]"
     exit "${1:-0}"
 }
 
@@ -65,6 +65,19 @@ show() {
     done
 }
 
+# edit <base_file> <available_dir> [name...]
+edit() {
+    local base="$1" avail="$2"; shift 2
+    [[ $# -gt 0 ]] || { "${EDITOR:-vi}" "$base"; return; }
+    local files=()
+    for arg in "$@"; do
+        local matches=("$avail"/*"$arg"*.xml)
+        [[ ${#matches[@]} -gt 0 ]] || { echo "no match for '$arg'" >&2; exit 1; }
+        files+=("${matches[@]}")
+    done
+    "${EDITOR:-vi}" "${files[@]}"
+}
+
 cmd="${1:-list}"; shift || true
 
 case "$cmd" in
@@ -72,6 +85,8 @@ case "$cmd" in
   user-list|user-enable|user-disable)  toggle "${cmd#user-}"   "$USERS_AVAIL" "$USERS_D" "$@" ;;
   show)                                show "$CONFIG_XML" "$PARTS"       "$@" ;;
   user-show)                           show "$USERS_XML"  "$USERS_AVAIL" "$@" ;;
+  edit)                                edit "$CONFIG_XML" "$PARTS"       "$@" ;;
+  user-edit)                           edit "$USERS_XML"  "$USERS_AVAIL" "$@" ;;
   -h|--help)                           usage 0 ;;
   *)                                   usage 1 ;;
 esac
