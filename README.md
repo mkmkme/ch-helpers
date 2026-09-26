@@ -75,6 +75,15 @@ binary (located in the `build-ubsan` directory).
 binary (located in the `build-tsan` directory).  
 `ch-run --msan` will run the server with the MSAN build of the ClickHouse
 binary (located in the `build-msan` directory).  
+`ch-run --daemon` will start the server in the background. It writes a PID
+file named `ch-run.pid` in the selected data directory and prints the PID.
+`ch-run --stop` will gracefully stop that instance (use `-d` or `-l` to
+select a different data directory). It does not need a ClickHouse binary.
+
+`--daemon` cannot be combined with `--tmp`: the temporary directory would
+otherwise be removed when the launcher exits. `--stop` cannot be combined
+with `--tmp` either. A successful daemon launch means the process has started;
+it does not guarantee the server is ready to accept queries yet.
 
 Default data directory is `$HOME/.clickhouse-server/shared`.  
 Default ClickHouse binary is `$CWD/build/programs/clickhouse`.

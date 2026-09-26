@@ -12,6 +12,8 @@ function help() {
     echo "  -d, --datadir <path>   Path to the data directory"
     echo "  -t, --tmp              Use a temporary data directory"
     echo "  -l, --local            Use the local data directory"
+    echo "  --daemon               Start the server in the background"
+    echo "  --stop                 Stop the server in the selected data directory"
     echo "  --release              Use the release build"
     echo "  --asan                 Use the ASAN build"
     echo "  --ubsan                Use the UBSAN build"
@@ -28,13 +30,17 @@ binary_infix="build"
 datadir=""
 tmp=0
 use_local=0
+daemon=0
+stop=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -b|--binary)    binary="$2"; shift 2 ;;
-    -d|--datadir)   datadir="$2"; shift 2 ;;
+    -b|--binary)    [[ $# -ge 2 ]] || { echo "!! missing binary path" >&2; exit 1; }; binary="$2"; shift 2 ;;
+    -d|--datadir)   [[ $# -ge 2 ]] || { echo "!! missing data directory" >&2; exit 1; }; datadir="$2"; shift 2 ;;
     -t|--tmp)       tmp=1; shift ;;
     -l|--local)     use_local=1; shift ;;
+    --daemon)       daemon=1; shift ;;
+    --stop)         stop=1; shift ;;
     --release)      binary_infix="build-release"; shift ;;
     --asan)         binary_infix="build-asan"; shift ;;
     --ubsan)        binary_infix="build-ubsan"; shift ;;
@@ -45,6 +51,19 @@ while [[ $# -gt 0 ]]; do
     *)              break ;;
   esac
 done
+
+if [[ $daemon -eq 1 && $stop -eq 1 ]]; then
+    echo "!! --daemon and --stop cannot be used together" >&2
+    exit 1
+fi
+if [[ $tmp -eq 1 && ( $daemon -eq 1 || $stop -eq 1 ) ]]; then
+    echo "!! --tmp cannot be used with --daemon or --stop" >&2
+    exit 1
+fi
+if [[ $stop -eq 1 && $# -gt 0 ]]; then
+    echo "!! --stop does not accept server arguments" >&2
+    exit 1
+fi
 
 if [[ $tmp -eq 1 ]]; then
     tmpbase="${TMPDIR:-/tmp}"
@@ -58,7 +77,64 @@ elif [[ -z $datadir ]]; then
     datadir="$HOME/.clickhouse-server/shared"
     echo "using shared dir: $datadir" >&2
 fi
-mkdir -p "$datadir"
+
+if [[ $stop -eq 1 ]]; then
+    if [[ ! -d $datadir ]]; then
+        echo "!! data directory does not exist: $datadir" >&2
+        exit 1
+    fi
+else
+    mkdir -p "$datadir"
+fi
+
+if [[ $daemon -eq 1 || $stop -eq 1 ]]; then
+    datadir="$(cd "$datadir" && pwd -P)"
+    pidfile="$datadir/ch-run.pid"
+fi
+
+# Only signal a process launched with this config and data directory. In particular,
+# a stale PID file must not cause us to signal an unrelated process after PID reuse.
+function is_our_server() {
+    local pid="$1" arg
+    local -a cmdline
+    [[ -r /proc/$pid/cmdline && -r /proc/$pid/environ ]] || return 1
+    mapfile -d '' -t cmdline < "/proc/$pid/cmdline" || return 1
+    [[ ${cmdline[1]:-} == server ]] || return 1
+    for arg in "${cmdline[@]}"; do
+        if [[ $arg == "--config-file=$CONFIG" ]]; then
+            grep -zFxq "CLICKHOUSE_DATA_PATH=$datadir" "/proc/$pid/environ"
+            return $?
+        fi
+    done
+    return 1
+}
+
+function read_pid() {
+    [[ -f $pidfile ]] || return 1
+    pid="$(<"$pidfile")"
+    [[ $pid =~ ^[1-9][0-9]*$ ]]
+}
+
+if [[ $stop -eq 1 ]]; then
+    if ! read_pid; then
+        echo "!! no valid PID file at $pidfile" >&2
+        exit 1
+    fi
+    if ! is_our_server "$pid"; then
+        echo "!! PID $pid is not this server (or the PID file is stale); refusing to signal it" >&2
+        exit 1
+    fi
+    kill -TERM "$pid"
+    for ((i = 0; i < 150; i++)); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "stopped server (PID $pid)" >&2
+            exit 0
+        fi
+        sleep 0.2
+    done
+    echo "!! timed out waiting for server (PID $pid) to stop" >&2
+    exit 1
+fi
 
 if [[ -z "$binary" ]]; then
     if is_pwd_a_git_repo; then
@@ -76,6 +152,23 @@ fi
 
 if [[ $tmp -eq 1 ]]; then
     trap 'rm -rf "$datadir"; echo "removed tmp data dir: $datadir" >&2' EXIT
+fi
+
+if [[ $daemon -eq 1 ]]; then
+    if read_pid && kill -0 "$pid" 2>/dev/null; then
+        echo "!! PID file $pidfile refers to a running process (PID $pid); refusing to start" >&2
+        exit 1
+    fi
+    CLICKHOUSE_DATA_PATH="$datadir" "$binary" server --config-file="$CONFIG" --pid-file="$pidfile" --daemon "$@"
+    for ((i = 0; i < 150; i++)); do
+        if read_pid && is_our_server "$pid"; then
+            echo "started server (PID $pid, data directory $datadir)" >&2
+            exit 0
+        fi
+        sleep 0.2
+    done
+    echo "!! server did not create a live PID at $pidfile within 30 seconds" >&2
+    exit 1
 fi
 
 CLICKHOUSE_DATA_PATH="$datadir" "$binary" server --config-file="$CONFIG" "$@"
