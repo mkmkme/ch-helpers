@@ -159,7 +159,15 @@ if [[ $daemon -eq 1 ]]; then
         echo "!! PID file $pidfile refers to a running process (PID $pid); refusing to start" >&2
         exit 1
     fi
-    CLICKHOUSE_DATA_PATH="$datadir" "$binary" server --config-file="$CONFIG" --pid-file="$pidfile" --daemon "$@"
+    # Daemons have no terminal; keep their logs alongside their data unless
+    # the caller has explicitly selected a ClickHouse log file.
+    log_option=("--log-file=$datadir/clickhouse-server.log")
+    for arg in "$@"; do
+        case "$arg" in
+            --log-file|--log-file=*|-L|-L*) log_option=(); break ;;
+        esac
+    done
+    CLICKHOUSE_DATA_PATH="$datadir" "$binary" server --config-file="$CONFIG" --pid-file="$pidfile" --daemon "${log_option[@]}" "$@"
     for ((i = 0; i < 150; i++)); do
         if read_pid && is_our_server "$pid"; then
             echo "started server (PID $pid, data directory $datadir)" >&2

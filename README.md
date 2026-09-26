@@ -79,6 +79,10 @@ binary (located in the `build-msan` directory).
 file named `ch-run.pid` in the selected data directory and prints the PID.
 `ch-run --stop` will gracefully stop that instance (use `-d` or `-l` to
 select a different data directory). It does not need a ClickHouse binary.
+Daemon runs write to `clickhouse-server.log` in the selected data directory,
+so you can follow startup and runtime messages with `tail -f` on that file.
+Pass ClickHouse's `--log-file=/path/to/file` after the `ch-run` options to
+choose another log path. Foreground logging is unchanged.
 
 `--daemon` cannot be combined with `--tmp`: the temporary directory would
 otherwise be removed when the launcher exits. `--stop` cannot be combined
