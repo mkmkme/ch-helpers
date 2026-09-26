@@ -43,6 +43,7 @@ Options that change the build directory:
     --ubsan           Use undefined behavior sanitizer
     --tsan            Use thread sanitizer
     --msan            Use memory sanitizer
+    --asan-ubsan      Use address and UB sanitizers
 EOF
 }
 
@@ -153,7 +154,7 @@ function main() {
                 dir=$(git_root)/build-release
                 shift
             ;;
-            --asan|--ubsan|--tsan|--msan)
+            --asan|--ubsan|--tsan|--msan|--asan-ubsan)
                 if [[ -n "$sanitizer" ]]; then
                     echo "Only one of sanitizers can be specified" >&2
                     exit 1
@@ -175,6 +176,10 @@ function main() {
                     --msan)
                         sanitizer=memory
                         dir=$(git_root)/build-msan
+                    ;;
+                    --asan-ubsan)
+                        sanitizer=address,undefined
+                        dir=$(git_root)/build-asan-ubsan
                     ;;
                 esac
 
