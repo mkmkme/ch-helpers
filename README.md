@@ -49,48 +49,37 @@ is defined in the part `10-mikhail.xml`. So will `ch-conf user-enable 10`.
 
 ## `ch-run`
 
-This script is used to run an instance of ClickHouse server with the config
-defined and configured in this repository. Its default purpose is to be run from
-a git repository and use the ClickHouse binary from the repository.
+Runs one ClickHouse server in the background as the systemd user service
+`ch-run.service`, using this repository's configuration and enabled fragments.
+Requires a running systemd user manager and systemd 254 or newer.
 
-It can also be run with a custom ClickHouse binary and a custom data directory.
+Data is temporary by default: a directory under `/var/tmp` is removed after the
+service stops or fails. Pass `-d/--datadir` to keep data instead. An abrupt system
+crash can leave temporary directories behind.
 
 ### Examples
 
-`ch-run` will run the server with the config defined and configured in this
-repository.  
-`ch-run -b /path/to/clickhouse-server` will run the
-server with the custom ClickHouse binary.  
-`ch-run -d /path/to/data` will run the server with the custom data directory.  
-`ch-run -t` will run the server in a temporary data directory.  
-`ch-run -l` will run the server in the local directory `chrun` in the current
-working directory.  
-`ch-run --release` will run the server with the release build of the ClickHouse
-binary (located in the `build-release` directory).  
-`ch-run --asan` will run the server with the ASAN build of the ClickHouse
-binary (located in the `build-asan` directory).  
-`ch-run --ubsan` will run the server with the UBSAN build of the ClickHouse
-binary (located in the `build-ubsan` directory).  
-`ch-run --tsan` will run the server with the TSAN build of the ClickHouse
-binary (located in the `build-tsan` directory).  
-`ch-run --msan` will run the server with the MSAN build of the ClickHouse
-binary (located in the `build-msan` directory).  
-`ch-run --daemon` will start the server in the background. It writes a PID
-file named `ch-run.pid` in the selected data directory and prints the PID.
-`ch-run --stop` will gracefully stop that instance (use `-d` or `-l` to
-select a different data directory). It does not need a ClickHouse binary.
-Daemon runs write to `clickhouse-server.log` in the selected data directory,
-so you can follow startup and runtime messages with `tail -f` on that file.
-Pass ClickHouse's `--log-file=/path/to/file` after the `ch-run` options to
-choose another log path. Foreground logging is unchanged.
+- `ch-run` uses `<git-repository-root>/build/programs/clickhouse`.
+- `ch-run -b /path/to/clickhouse` selects a custom binary. `CH_BINARY` also sets
+  the default binary.
+- `ch-run -d /path/to/data` uses a persistent data directory.
+- `ch-run --stop` stops the server.
+- `ch-run --status` shows `systemctl --user status ch-run.service`.
+- `ch-run --logs` shows `journalctl --user -u ch-run.service`.
 
-`--daemon` cannot be combined with `--tmp`: the temporary directory would
-otherwise be removed when the launcher exits. `--stop` cannot be combined
-with `--tmp` either. A successful daemon launch means the process has started;
-it does not guarantee the server is ready to accept queries yet.
+Stop, status, and logs do not require a binary or data directory. Only one
+instance can run per user; stop it before starting another. Remaining arguments
+are passed to ClickHouse, for example `ch-run -- --http_port=8124`.
 
-Default data directory is `$HOME/.clickhouse-server/shared`.  
-Default ClickHouse binary is `$CWD/build/programs/clickhouse`.
+Console output goes to journald. Logs remain after the service and temporary
+data are removed, and include earlier runs under the same unit name. Follow
+them with `journalctl --user -u ch-run.service -f`; on systemd 257 or newer,
+add `-I` to select only the latest run.
+
+A successful launch means the executable started, not that ClickHouse is ready
+for queries. Completed and failed transient units are automatically collected,
+so `--status` may report that the unit is not found after it exits. User services
+can stop after the last logout unless lingering is enabled (`loginctl enable-linger`).
 
 ## chbuild.sh
 

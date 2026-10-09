@@ -9,136 +9,48 @@ function help() {
     echo "Usage: ch-run [options]"
     echo "Options:"
     echo "  -b, --binary <path>    Path to the ClickHouse binary"
-    echo "  -d, --datadir <path>   Path to the data directory"
-    echo "  -t, --tmp              Use a temporary data directory"
-    echo "  -l, --local            Use the local data directory"
-    echo "  --daemon               Start the server in the background"
-    echo "  --stop                 Stop the server in the selected data directory"
-    echo "  --release              Use the release build"
-    echo "  --asan                 Use the ASAN build"
-    echo "  --ubsan                Use the UBSAN build"
-    echo "  --tsan                 Use the TSAN build"
-    echo "  --msan                 Use the MSAN build"
+    echo "  -d, --datadir <path>   Persistent data directory (default: temporary)"
+    echo "  --stop                 Stop the managed server"
+    echo "  --status               Show the managed server's status"
+    echo "  --logs                 Show the managed server's journal logs"
     echo "  --help                 Show this help message"
 }
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="$ROOT/config/config.xml"
+UNIT="ch-run.service"
 
 binary="${CH_BINARY:-}"
-binary_infix="build"
 datadir=""
-tmp=0
-use_local=0
-daemon=0
-stop=0
+action=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -b|--binary)    [[ $# -ge 2 ]] || { echo "!! missing binary path" >&2; exit 1; }; binary="$2"; shift 2 ;;
     -d|--datadir)   [[ $# -ge 2 ]] || { echo "!! missing data directory" >&2; exit 1; }; datadir="$2"; shift 2 ;;
-    -t|--tmp)       tmp=1; shift ;;
-    -l|--local)     use_local=1; shift ;;
-    --daemon)       daemon=1; shift ;;
-    --stop)         stop=1; shift ;;
-    --release)      binary_infix="build-release"; shift ;;
-    --asan)         binary_infix="build-asan"; shift ;;
-    --ubsan)        binary_infix="build-ubsan"; shift ;;
-    --tsan)         binary_infix="build-tsan"; shift ;;
-    --msan)         binary_infix="build-msan"; shift ;;
+    --stop|--status|--logs)
+        [[ -z $action ]] || { echo "!! choose only one of --stop, --status, --logs" >&2; exit 1; }
+        action="${1#--}"; shift ;;
     --)             shift; break ;;
     --help)         help; exit 0 ;;
     *)              break ;;
   esac
 done
 
-if [[ $daemon -eq 1 && $stop -eq 1 ]]; then
-    echo "!! --daemon and --stop cannot be used together" >&2
-    exit 1
-fi
-if [[ $tmp -eq 1 && ( $daemon -eq 1 || $stop -eq 1 ) ]]; then
-    echo "!! --tmp cannot be used with --daemon or --stop" >&2
-    exit 1
-fi
-if [[ $stop -eq 1 && $# -gt 0 ]]; then
-    echo "!! --stop does not accept server arguments" >&2
-    exit 1
-fi
-
-if [[ $tmp -eq 1 ]]; then
-    tmpbase="${TMPDIR:-/tmp}"
-    mkdir -p "$tmpbase"
-    datadir="$(mktemp -d "$tmpbase/chrun-XXXXXX")"
-    echo "tmp data dir: $datadir" >&2
-elif [[ $use_local -eq 1 ]]; then
-    datadir="$(pwd)/local-chrun"
-    echo "using local dir: $datadir" >&2
-elif [[ -z $datadir ]]; then
-    datadir="$HOME/.clickhouse-server/shared"
-    echo "using shared dir: $datadir" >&2
-fi
-
-if [[ $stop -eq 1 ]]; then
-    if [[ ! -d $datadir ]]; then
-        echo "!! data directory does not exist: $datadir" >&2
+if [[ -n $action ]]; then
+    if [[ $# -gt 0 ]]; then
+        echo "!! --$action does not accept server arguments" >&2
         exit 1
     fi
-else
-    mkdir -p "$datadir"
-fi
-
-if [[ $daemon -eq 1 || $stop -eq 1 ]]; then
-    datadir="$(cd "$datadir" && pwd -P)"
-    pidfile="$datadir/ch-run.pid"
-fi
-
-# Only signal a process launched with this config and data directory. In particular,
-# a stale PID file must not cause us to signal an unrelated process after PID reuse.
-function is_our_server() {
-    local pid="$1" arg
-    local -a cmdline
-    [[ -r /proc/$pid/cmdline && -r /proc/$pid/environ ]] || return 1
-    mapfile -d '' -t cmdline < "/proc/$pid/cmdline" || return 1
-    [[ ${cmdline[1]:-} == server ]] || return 1
-    for arg in "${cmdline[@]}"; do
-        if [[ $arg == "--config-file=$CONFIG" ]]; then
-            grep -zFxq "CLICKHOUSE_DATA_PATH=$datadir" "/proc/$pid/environ"
-            return $?
-        fi
-    done
-    return 1
-}
-
-function read_pid() {
-    [[ -f $pidfile ]] || return 1
-    pid="$(<"$pidfile")"
-    [[ $pid =~ ^[1-9][0-9]*$ ]]
-}
-
-if [[ $stop -eq 1 ]]; then
-    if ! read_pid; then
-        echo "!! no valid PID file at $pidfile" >&2
-        exit 1
-    fi
-    if ! is_our_server "$pid"; then
-        echo "!! PID $pid is not this server (or the PID file is stale); refusing to signal it" >&2
-        exit 1
-    fi
-    kill -TERM "$pid"
-    for ((i = 0; i < 150; i++)); do
-        if ! kill -0 "$pid" 2>/dev/null; then
-            echo "stopped server (PID $pid)" >&2
-            exit 0
-        fi
-        sleep 0.2
-    done
-    echo "!! timed out waiting for server (PID $pid) to stop" >&2
-    exit 1
+    case "$action" in
+        stop|status) exec systemctl --user "$action" "$UNIT" ;;
+        logs) exec journalctl --user -u "$UNIT" ;;
+    esac
 fi
 
 if [[ -z "$binary" ]]; then
     if is_pwd_a_git_repo; then
-        binary="$(git rev-parse --show-toplevel 2>/dev/null)/${binary_infix}/programs/clickhouse"
+        binary="$(git rev-parse --show-toplevel 2>/dev/null)/build/programs/clickhouse"
     else
         echo "!! ClickHouse binary not found, provide one with -b/--binary or run from a git repo" >&2
         exit 1
@@ -150,33 +62,38 @@ if [[ ! -x "$binary" ]]; then
     exit 1
 fi
 
-if [[ $tmp -eq 1 ]]; then
-    trap 'rm -rf "$datadir"; echo "removed tmp data dir: $datadir" >&2' EXIT
-fi
+binary="$(realpath -e -- "$binary")"
 
-if [[ $daemon -eq 1 ]]; then
-    if read_pid && kill -0 "$pid" 2>/dev/null; then
-        echo "!! PID file $pidfile refers to a running process (PID $pid); refusing to start" >&2
+# ClickHouse must remain in the foreground so systemd can manage its lifetime.
+for arg in "$@"; do
+    if [[ $arg == --daemon || $arg == --daemon=* ]]; then
+        echo "!! ClickHouse --daemon is incompatible with systemd management" >&2
         exit 1
     fi
-    # Daemons have no terminal; keep their logs alongside their data unless
-    # the caller has explicitly selected a ClickHouse log file.
-    log_option=("--log-file=$datadir/clickhouse-server.log")
-    for arg in "$@"; do
-        case "$arg" in
-            --log-file|--log-file=*|-L|-L*) log_option=(); break ;;
-        esac
-    done
-    CLICKHOUSE_DATA_PATH="$datadir" "$binary" server --config-file="$CONFIG" --pid-file="$pidfile" --daemon "${log_option[@]}" "$@"
-    for ((i = 0; i < 150; i++)); do
-        if read_pid && is_our_server "$pid"; then
-            echo "started server (PID $pid, data directory $datadir)" >&2
-            exit 0
-        fi
-        sleep 0.2
-    done
-    echo "!! server did not create a live PID at $pidfile within 30 seconds" >&2
-    exit 1
-fi
+done
 
-CLICKHOUSE_DATA_PATH="$datadir" "$binary" server --config-file="$CONFIG" "$@"
+temporary=0
+properties=()
+if [[ -z $datadir ]]; then
+    datadir="$(mktemp -d /var/tmp/ch-run-XXXXXXXX)"
+    temporary=1
+    properties=(-p "ExecStopPost=/usr/bin/rm -rf -- $datadir")
+else
+    mkdir -p -- "$datadir"
+    datadir="$(cd "$datadir" && pwd -P)"
+fi
+echo "data directory: $datadir" >&2
+
+if systemd-run --user --unit="$UNIT" --service-type=exec --collect \
+    --expand-environment=no -p TimeoutStopSec=60s "${properties[@]}" \
+    --setenv="CLICKHOUSE_DATA_PATH=$datadir/" \
+    "$binary" server --config-file="$CONFIG" "$@"; then
+    echo "started $UNIT" >&2
+else
+    result=$?
+    # A rejected start (e.g. an existing unit) never runs ExecStopPost.
+    if [[ $temporary -eq 1 ]]; then
+        rm -rf -- "$datadir"
+    fi
+    exit "$result"
+fi
