@@ -4,7 +4,7 @@ set -efu
 set -o pipefail
 
 CLANG_VERSION=${CLANG_VERSION:-21}
-COMPILER_LAUNCHER=sccache
+COMPILER_LAUNCHER=ccache
 
 function is_pwd_a_git_repo() {
     git rev-parse --is-inside-work-tree 2>/dev/null >/dev/null
@@ -206,6 +206,7 @@ function main() {
         -DCMAKE_CXX_COMPILER_LAUNCHER="$COMPILER_LAUNCHER"
         -DCMAKE_C_COMPILER="clang-${CLANG_VERSION}"
         -DCMAKE_CXX_COMPILER="clang++-${CLANG_VERSION}"
+        -DENABLE_BUILD_PATH_MAPPING=ON
     )
 
     [[ "$cmake_compat" == 1 ]] && build_opts+=(
