@@ -225,7 +225,7 @@ function main() {
     elif [[ -z "$sanitizer" ]]; then
         build_opts+=(
             -DCMAKE_BUILD_TYPE=Debug
-            -DDEBUG_O_LEVEL=0
+            -DDEBUG_O_LEVEL=g
         )
     fi
 
