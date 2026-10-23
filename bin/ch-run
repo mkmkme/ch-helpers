@@ -6,13 +6,11 @@ function is_pwd_a_git_repo() {
 }
 
 function help() {
-    echo "Usage: ch-run [options]"
+    echo "Usage: ch-run [options] [server arguments]"
+    echo "       ch-run stop|status|logs"
     echo "Options:"
     echo "  -b, --binary <path>    Path to the ClickHouse binary"
     echo "  -d, --datadir <path>   Persistent data directory (default: temporary)"
-    echo "  --stop                 Stop the managed server"
-    echo "  --status               Show the managed server's status"
-    echo "  --logs                 Show the managed server's journal logs"
     echo "  --help                 Show this help message"
 }
 
@@ -24,13 +22,16 @@ binary="${CH_BINARY:-}"
 datadir=""
 action=""
 
+if [[ $# -gt 0 ]]; then
+    case "$1" in
+        stop|status|logs) action="$1"; shift ;;
+    esac
+fi
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -b|--binary)    [[ $# -ge 2 ]] || { echo "!! missing binary path" >&2; exit 1; }; binary="$2"; shift 2 ;;
     -d|--datadir)   [[ $# -ge 2 ]] || { echo "!! missing data directory" >&2; exit 1; }; datadir="$2"; shift 2 ;;
-    --stop|--status|--logs)
-        [[ -z $action ]] || { echo "!! choose only one of --stop, --status, --logs" >&2; exit 1; }
-        action="${1#--}"; shift ;;
     --)             shift; break ;;
     --help)         help; exit 0 ;;
     *)              break ;;
@@ -39,7 +40,7 @@ done
 
 if [[ -n $action ]]; then
     if [[ $# -gt 0 ]]; then
-        echo "!! --$action does not accept server arguments" >&2
+        echo "!! $action does not accept server arguments" >&2
         exit 1
     fi
     case "$action" in

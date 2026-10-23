@@ -63,9 +63,9 @@ crash can leave temporary directories behind.
 - `ch-run -b /path/to/clickhouse` selects a custom binary. `CH_BINARY` also sets
   the default binary.
 - `ch-run -d /path/to/data` uses a persistent data directory.
-- `ch-run --stop` stops the server.
-- `ch-run --status` shows `systemctl --user status ch-run.service`.
-- `ch-run --logs` shows `journalctl --user -u ch-run.service`.
+- `ch-run stop` stops the server.
+- `ch-run status` shows `systemctl --user status ch-run.service`.
+- `ch-run logs` shows `journalctl --user -u ch-run.service`.
 
 Stop, status, and logs do not require a binary or data directory. Only one
 instance can run per user; stop it before starting another. Remaining arguments
@@ -78,7 +78,7 @@ add `-I` to select only the latest run.
 
 A successful launch means the executable started, not that ClickHouse is ready
 for queries. Completed and failed transient units are automatically collected,
-so `--status` may report that the unit is not found after it exits. User services
+so `status` may report that the unit is not found after it exits. User services
 can stop after the last logout unless lingering is enabled (`loginctl enable-linger`).
 
 ## `ch-s3`
