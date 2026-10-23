@@ -1,0 +1,142 @@
+#!/bin/bash
+set -euo pipefail
+
+UNIT="ch-s3.service"
+S3_ENDPOINT="http://localhost:11111"
+FILER_ENDPOINT="http://localhost:11114"
+
+help() {
+    cat <<'EOF'
+Usage: ch-s3 [options]
+       ch-s3 stop|status|logs
+
+  -b, --binary <path>    SeaweedFS executable (default: weed on PATH)
+  -d, --datadir <path>   Persistent storage (default: per-checkout XDG data directory)
+  --test-dir <path>     ClickHouse tests directory (default: current git root/tests)
+  -h, --help            Show this help
+EOF
+}
+
+die() { echo "!! $*" >&2; exit 1; }
+
+action=""
+if [[ $# -gt 0 ]]; then
+    case "$1" in
+        stop|status|logs) action="$1"; shift ;;
+    esac
+fi
+
+if [[ -n $action ]]; then
+    [[ $# -eq 0 ]] || die "$action does not accept options"
+    case "$action" in
+        stop|status) exec systemctl --user "$action" "$UNIT" ;;
+        logs) exec journalctl --user -u "$UNIT" ;;
+    esac
+fi
+
+binary=""
+datadir=""
+test_dir=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -b|--binary|-d|--datadir|--test-dir)
+            [[ $# -ge 2 && -n $2 ]] || die "missing value for $1"
+            case "$1" in
+                -b|--binary) binary="$2" ;;
+                -d|--datadir) datadir="$2" ;;
+                --test-dir) test_dir="$2" ;;
+            esac
+            shift 2 ;;
+        --help|-h) help; exit 0 ;;
+        *) die "unknown argument: $1" ;;
+    esac
+done
+
+binary="$(realpath -e -- "${binary:-$(command -v weed)}")"
+
+if [[ -z $test_dir ]]; then
+    checkout="$(git rev-parse --show-toplevel 2>/dev/null)" \
+        || die "run from a ClickHouse checkout or provide --test-dir"
+    test_dir="$checkout/tests"
+fi
+[[ -d $test_dir/queries/0_stateless ]] || die "not a ClickHouse tests directory: $test_dir"
+test_dir="$(cd "$test_dir" && pwd -P)"
+if [[ -z $datadir ]]; then
+    checkout_id="$(printf '%s' "$test_dir" | sha256sum)"
+    datadir="${XDG_DATA_HOME:-$HOME/.local/share}/ch-s3/${checkout_id:0:16}"
+fi
+
+# Serialize starts before touching the configuration or persistent data.
+exec 8>"$XDG_RUNTIME_DIR/ch-s3.lock"
+flock -n 8 || die "another ch-s3 start is in progress"
+load_state="$(systemctl --user show "$UNIT" -p LoadState --value)"
+[[ $load_state == not-found ]] || die "$UNIT already exists; stop it before starting another instance"
+
+mkdir -p -- "$datadir"
+datadir="$(cd "$datadir" && pwd -P)"
+(
+    umask 077
+    cat > "$datadir/s3.json" <<'EOF'
+{"identities": [
+  {"name": "clickhouse", "credentials": [{"accessKey": "clickhouse", "secretKey": "clickhouse"}],
+   "actions": ["Admin", "Read", "Write", "List", "Tagging"]},
+  {"name": "test", "credentials": [{"accessKey": "test", "secretKey": "testtest"}],
+   "actions": ["Read", "Write", "List", "Tagging"]},
+  {"name": "anonymous", "actions": ["Read:test", "Write:test", "List:test", "Tagging:test"]}
+]}
+EOF
+)
+
+systemd-run --user --unit="$UNIT" --service-type=exec --collect \
+    --expand-environment=no --working-directory="$datadir" -p TimeoutStopSec=60s \
+    "$binary" mini -dir="$datadir" -bucket=test -s3.config="$datadir/s3.json" \
+    -ip=127.0.0.1 -ip.bind=127.0.0.1 -webdav=false -admin.ui=false \
+    -master.port=11112 -volume.port=11113 -filer.port=11114 -s3.port=11111 \
+    -admin.port=11115 -admin.port.grpc=21115 \
+    -s3.port.iceberg=0 -s3.port.lance=0 -master.telemetry=false \
+    -master.volumeSizeLimitMB=1024 -volume.max=0 -volume.preStopSeconds=0
+trap 'echo "!! S3 setup failed; see ch-s3 logs" >&2; systemctl --user stop "$UNIT" || true' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+deadline=$((SECONDS + 60))
+until curl --silent --fail --connect-timeout 1 --max-time 2 \
+    "$FILER_ENDPOINT/buckets/test/?metadata=true" >/dev/null; do
+    systemctl --user is-active --quiet "$UNIT" || die "SeaweedFS exited during startup"
+    (( SECONDS < deadline )) || die "timed out waiting for the test bucket"
+    sleep 1
+done
+
+# Listening on the S3 port does not imply that writable volumes exist yet.
+probe="$FILER_ENDPOINT/buckets/test/.ch-s3-write-probe-$$"
+deadline=$((SECONDS + 60))
+until curl --silent --fail --connect-timeout 1 --max-time 2 \
+    --request PUT --data-binary ready "$probe" >/dev/null; do
+    systemctl --user is-active --quiet "$UNIT" || die "SeaweedFS exited before write readiness"
+    (( SECONDS < deadline )) || die "timed out waiting for writable storage"
+    sleep 1
+done
+curl --silent --show-error --fail --max-time 10 --request DELETE "$probe" >/dev/null
+
+shopt -s nullglob dotglob
+fixtures=("$test_dir/queries/0_stateless/data_minio/"*)
+if [[ ${#fixtures[@]} -gt 0 ]]; then
+    timeout 180 "$binary" filer.copy "${fixtures[@]}" "$FILER_ENDPOINT/buckets/test/"
+fi
+curl --silent --show-error --fail --max-time 10 \
+    "$S3_ENDPOINT/test/?list-type=2&max-keys=1" >/dev/null
+systemctl --user is-active --quiet "$UNIT" || die "SeaweedFS exited during setup"
+
+# Older tests invoke aws without explicit credentials; preserve existing profiles.
+credentials="${AWS_SHARED_CREDENTIALS_FILE:-$HOME/.aws/credentials}"
+if ! grep -Eq '^[[:space:]]*\[default\][[:space:]]*($|[#;])' "$credentials" 2>/dev/null; then
+    (
+        umask 077
+        mkdir -p -- "$(dirname "$credentials")"
+        printf '\n[default]\naws_access_key_id=clickhouse\naws_secret_access_key=clickhouse\n' >> "$credentials"
+    )
+fi
+
+trap - EXIT INT TERM
+echo "S3 ready: $S3_ENDPOINT/test/ ($UNIT)" >&2
+echo "data directory: $datadir (retained on stop)" >&2

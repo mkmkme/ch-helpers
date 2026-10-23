@@ -81,6 +81,39 @@ for queries. Completed and failed transient units are automatically collected,
 so `--status` may report that the unit is not found after it exits. User services
 can stop after the last logout unless lingering is enabled (`loginctl enable-linger`).
 
+## `ch-s3`
+
+Runs SeaweedFS mini as `ch-s3.service` with ClickHouse's stateless-test S3 setup.
+Requires `weed` on `PATH` (tested with 4.48), curl, flock, and systemd 254+
+with a running user manager. The standard `linux_amd64.tar.gz` release is enough
+on Linux x86-64.
+
+- `ch-s3` starts the server and uploads the current ClickHouse
+  checkout's `tests/queries/0_stateless/data_minio/` fixtures.
+- `ch-s3 --test-dir /path/to/ClickHouse/tests` selects tests explicitly.
+- `ch-s3 -b /path/to/weed -d /path/to/data` selects the binary and storage.
+- `ch-s3 stop`, `ch-s3 status`, and `ch-s3 logs` work from any directory.
+
+Endpoint: `http://localhost:11111`, public bucket: `test`, credentials:
+`clickhouse/clickhouse` (admin) and `test/testtest` (read/write). Start waits for
+setup and fixture upload. Only one instance runs per user; stop any MinIO on
+port 11111 first. `ch-minio` is unchanged.
+
+Data persists under `${XDG_DATA_HOME:-~/.local/share}/ch-s3/<checkout-id>`.
+Restart reuploads fixtures without deleting other objects. MinIO data directories
+cannot be reused.
+
+For older `aws`-based tests, creates a default profile in
+`${AWS_SHARED_CREDENTIALS_FILE:-~/.aws/credentials}` if missing. Existing defaults
+are preserved; override other credentials when running tests with
+`AWS_ACCESS_KEY_ID=clickhouse AWS_SECRET_ACCESS_KEY=clickhouse AWS_DEFAULT_REGION=us-east-1`.
+
+Local testing only: all services bind to loopback, the filer API is unauthenticated,
+and writes do not fsync by default. Ports: 11111–11115 and 21111–21115.
+WebDAV, Iceberg/Lance catalogs, and the admin UI are disabled; mini's admin
+service and maintenance worker still run.
+Logs go to journald; unit collection and logout behavior are the same as `ch-run`.
+
 ## chbuild.sh
 
 This is the script I use to build ClickHouse. It's a wrapper around the `cmake`
