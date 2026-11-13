@@ -23,18 +23,45 @@ set -euo pipefail
 
 die() { echo "error: $*" >&2; exit 1; }
 
-# 1. Determine the source repo.
-MAIN_REPO=$(git rev-parse --show-toplevel 2>/dev/null) \
-    || die "not inside a git repository"
-MAIN_REPO_NAME=$(basename "$MAIN_REPO")
+usage() {
+    cat <<'EOF'
+Usage: ch-wt.sh [options] <branch-name> [worktree-path]
 
-# 2. Validate inputs.
+Create a Git worktree with submodule data hardlinked from the source repository.
+Run from inside the source repository or one of its worktrees.
+
+Options:
+  -b, --base <ref>  Create a new branch from a local branch, remote-tracking ref,
+                    tag, or commit instead of HEAD. Does not fetch the base ref.
+  -e, --existing    Require a branch that exists locally or on origin; fail if
+                    neither exists. Cannot be combined with --base.
+  -h, --help        Show this help and exit.
+  --                End option parsing.
+
+Existing local branches are checked out. Branches found only on origin get a
+local tracking branch. Otherwise, a new branch starts at the current HEAD.
+Using --base with an existing branch is an error.
+
+The default path is ../<source-repo-name>-<branch>, with branch slashes replaced
+by dashes. An explicit worktree path is relative to the current directory.
+
+Prerequisites: submodules must already be initialized in the source repository
+(git submodule update --init), and hardlinks require the same filesystem.
+Submodule setup may fetch missing commits.
+EOF
+}
+
+# 1. Validate inputs.
 BASE=HEAD
 BASE_SET=false
 EXISTING_ONLY=false
 POSITIONAL=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
         -b|--base)
             [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 requires a ref"
             BASE="$2"
@@ -62,6 +89,11 @@ BRANCH="${POSITIONAL[0]:-}"
 if [ "$EXISTING_ONLY" = true ] && [ "$BASE_SET" = true ]; then
     die "--existing cannot be combined with --base"
 fi
+
+# 2. Determine the source repo.
+MAIN_REPO=$(git rev-parse --show-toplevel 2>/dev/null) \
+    || die "not inside a git repository"
+MAIN_REPO_NAME=$(basename "$MAIN_REPO")
 
 SAFE_BRANCH="${BRANCH//\//-}"
 
