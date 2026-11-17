@@ -162,8 +162,6 @@ find "$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules" -name config.worktree -exec \
 echo "Registering submodules..."
 git -C "$WORKTREE_PATH" submodule init
 
-# Check out each submodule at the commit the superproject records, using only
-# the hardlinked module data. A missing commit fails instead of fetching.
 GITLINKS=$(git -C "$WORKTREE_PATH" ls-files -s |
     sed -n 's/^160000 \([0-9a-f]*\) 0\t\(.*\)$/\1 \2/p')
 
@@ -175,24 +173,64 @@ SUBMODULE_COUNT=$(git -C "$WORKTREE_PATH" config --file .gitmodules \
 [ "$GITLINK_COUNT" = "$SUBMODULE_COUNT" ] \
     || die "gitlink count $GITLINK_COUNT does not match .gitmodules count $SUBMODULE_COUNT"
 
-echo "Checking out submodules..."
-printf '%s\n' "$GITLINKS" |
+# nproc is the total budget: each job checks out one submodule with up to
+# SUBMODULE_CHECKOUT_WORKERS parallel workers (default min(8, nproc)), and
+# SUBMODULE_JOBS (default nproc / workers) submodules run at once.
+CPU_COUNT=$(nproc)
+CHECKOUT_WORKERS=${SUBMODULE_CHECKOUT_WORKERS:-$(( CPU_COUNT < 8 ? CPU_COUNT : 8 ))}
+[ "$CHECKOUT_WORKERS" -ge 1 ] || die "SUBMODULE_CHECKOUT_WORKERS must be positive"
+JOBS=${SUBMODULE_JOBS:-$(( CPU_COUNT / CHECKOUT_WORKERS ))}
+[ "$JOBS" -ge 1 ] || JOBS=1
+
+# Check out each submodule at the commit the superproject records, using only
+# the hardlinked module data. A missing commit fails instead of fetching.
+# Known heavy submodules go first so they don't finish last on their own.
+echo "Checking out submodules ($JOBS jobs x $CHECKOUT_WORKERS workers)..."
+{
+    for submodule_path in \
+        contrib/llvm-project \
+        contrib/google-cloud-cpp \
+        contrib/aws \
+        contrib/openssl \
+        contrib/icu \
+        contrib/boost \
+        contrib/rust_vendor \
+        contrib/sysroot \
+        contrib/grpc \
+        contrib/arrow \
+        contrib/curl \
+        contrib/rocksdb \
+        contrib/postgres \
+        contrib/wasmtime
+    do
+        printf '%s\n' "$GITLINKS" | awk -v p="$submodule_path" '$2 == p { print; exit }'
+    done
+    printf '%s\n' "$GITLINKS"
+} |
+    awk 'NF == 2 && !seen[$2]++' |
     while read -r expected_commit submodule_path; do
-        [ -n "$submodule_path" ] || continue
-        module_git_dir="$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules/$submodule_path"
-        module_worktree="$WORKTREE_PATH/$submodule_path"
-        mkdir -p "$module_worktree"
-        printf 'gitdir: %s\n' "$module_git_dir" > "$module_worktree/.git"
+        printf '%s\0%s\0' "$expected_commit" "$submodule_path"
+    done |
+    xargs -0 -r -n2 -P "$JOBS" sh -c '
+        main_repo=$1 worktree_path=$2 modules_dir=$3 checkout_workers=$4
+        expected_commit=$5 submodule_path=$6
+        module_git_dir="$modules_dir/$submodule_path"
+        module_worktree="$worktree_path/$submodule_path"
+        mkdir -p "$module_worktree" || exit 1
+        printf "gitdir: %s\n" "$module_git_dir" > "$module_worktree/.git" || exit 1
         if ! git --git-dir="$module_git_dir" --work-tree="$module_worktree" \
             -c advice.detachedHead=false \
+            -c checkout.workers="$checkout_workers" \
+            -c checkout.thresholdForParallelism=100 \
+            -c index.threads=true \
             checkout -q -f --detach "$expected_commit"
         then
             echo "error: $submodule_path: commit $expected_commit is missing from the local module data." >&2
             echo "Fetch it into the main repo, then create the worktree again:" >&2
-            echo "    git -C $MAIN_REPO/$submodule_path fetch origin $expected_commit" >&2
+            echo "    git -C $main_repo/$submodule_path fetch origin $expected_commit" >&2
             exit 1
         fi
-    done \
+    ' sh "$MAIN_REPO" "$WORKTREE_PATH" "$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules" "$CHECKOUT_WORKERS" \
     || die "a submodule could not be checked out at the recorded commit"
 
 # 6. Report results.
