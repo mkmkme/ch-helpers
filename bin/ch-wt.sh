@@ -190,6 +190,13 @@ if [ "$SKIP_SUBMODULES" = false ]; then
     find "$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules" \
         \( -name config -o -name config.worktree \) -exec \
         sed -i "s|worktree = .*/contrib/|worktree = $WORKTREE_PATH/contrib/|" {} +
+    # Git appends to reflogs and rewrites FETCH_HEAD in place, so hardlinked
+    # copies would leak into the main repo and every other worktree. Give
+    # this worktree its own copies.
+    find "$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules" -type f \
+        \( -path '*/logs/*' -o -name FETCH_HEAD \) -print0 |
+        xargs -0 -r -n 32 -P "$(nproc)" sh -c 'for f; do cp -p "$f" "$f.tmp" && mv -f "$f.tmp" "$f" || exit 1; done' sh \
+        || die "copying submodule reflogs failed"
     wait "$init_pid" || die "submodule init failed"
 
     GITLINKS=$(git -C "$WORKTREE_PATH" ls-files -s |
