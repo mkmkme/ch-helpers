@@ -48,7 +48,7 @@ Options:
   -n, --no-submodules
                     Skip submodule setup. Much faster; use it when the worktree
                     won't be built or tested.
-  -h, --help       Show this help and exit.
+  -h, --help        Show this help and exit.
   --                End option parsing.
 
 Existing local branches are checked out. Branches found only on origin get a
@@ -176,7 +176,6 @@ checkout_status=0
 git -C "$WORKTREE_PATH" \
     -c checkout.workers=0 \
     -c core.fsync=none \
-    -c gc.auto=0 \
     checkout -q -f HEAD -- . || checkout_status=$?
 cp_status=0
 [ -z "$cp_pid" ] || wait "$cp_pid" || cp_status=$?
@@ -262,10 +261,7 @@ if [ "$SKIP_SUBMODULES" = false ]; then
             if ! git --git-dir="$module_git_dir" --work-tree="$module_worktree" \
                 -c advice.detachedHead=false \
                 -c checkout.workers="$checkout_workers" \
-                -c checkout.thresholdForParallelism=100 \
-                -c index.threads=true \
                 -c core.fsync=none \
-                -c gc.auto=0 \
                 checkout -q -f --detach "$expected_commit"
             then
                 echo "error: $submodule_path: commit $expected_commit is missing from the local module data." >&2
