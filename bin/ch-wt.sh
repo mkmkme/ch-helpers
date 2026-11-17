@@ -17,7 +17,8 @@
 # Slashes in branch names are replaced with dashes in the default path.
 #
 # Prerequisites: submodules must already be cloned in the main repo
-# (git submodule update --init must have been run at least once).
+# (git submodule update --init must have been run at least once). Submodules
+# are checked out at the commits the branch records, without network access.
 
 set -euo pipefail
 
@@ -47,7 +48,7 @@ by dashes. An explicit worktree path is relative to the current directory.
 
 Prerequisites: submodules must already be initialized in the source repository
 (git submodule update --init), and hardlinks require the same filesystem.
-Submodule setup may fetch missing commits.
+Submodule setup never fetches; it fails if a recorded commit is missing.
 EOF
 }
 
@@ -158,12 +159,30 @@ find "$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules" -name config -exec \
 find "$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules" -name config.worktree -exec \
     sed -i "s|worktree = .*/contrib/|worktree = $WORKTREE_PATH/contrib/|" {} +
 
-echo "Registering submodules (fetching missing commits if needed)..."
-git -C "$WORKTREE_PATH" submodule update --init
+echo "Registering submodules..."
+git -C "$WORKTREE_PATH" submodule init
 
-echo "Populating submodule working trees..."
-git -C "$WORKTREE_PATH" submodule foreach \
-    '(git read-tree HEAD && git checkout -- .) 2>/dev/null || echo "SKIP: $name"'
+# Check out each submodule at the commit the superproject records, using only
+# the hardlinked module data. A missing commit fails instead of fetching.
+echo "Checking out submodules..."
+git -C "$WORKTREE_PATH" ls-files -s |
+    sed -n 's/^160000 \([0-9a-f]*\) 0\t\(.*\)$/\1 \2/p' |
+    while read -r expected_commit submodule_path; do
+        module_git_dir="$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules/$submodule_path"
+        module_worktree="$WORKTREE_PATH/$submodule_path"
+        mkdir -p "$module_worktree"
+        printf 'gitdir: %s\n' "$module_git_dir" > "$module_worktree/.git"
+        if ! git --git-dir="$module_git_dir" --work-tree="$module_worktree" \
+            -c advice.detachedHead=false \
+            checkout -q -f --detach "$expected_commit"
+        then
+            echo "error: $submodule_path: commit $expected_commit is missing from the local module data." >&2
+            echo "Fetch it into the main repo, then create the worktree again:" >&2
+            echo "    git -C $MAIN_REPO/$submodule_path fetch origin $expected_commit" >&2
+            exit 1
+        fi
+    done \
+    || die "a submodule could not be checked out at the recorded commit"
 
 # 6. Report results.
 echo ""
