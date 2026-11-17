@@ -131,36 +131,49 @@ if [ "$BASE_SET" = true ]; then
         || die "base does not resolve to a commit: $BASE"
 fi
 
-# 4. Create the worktree.
+# 4. Create the worktree. Files are checked out in step 5, together with the
+# submodule data copy.
 if [ -n "$LOCAL" ]; then
     echo "Branch '$BRANCH' exists locally — checking out."
-    git -C "$MAIN_REPO" worktree add "$WORKTREE_PATH" "$BRANCH"
+    git -C "$MAIN_REPO" worktree add --no-checkout "$WORKTREE_PATH" "$BRANCH"
 elif [ -n "$REMOTE" ]; then
     echo "Branch '$BRANCH' exists on remote — creating local tracking branch."
-    git -C "$MAIN_REPO" worktree add "$WORKTREE_PATH" -b "$BRANCH" "origin/$BRANCH"
+    git -C "$MAIN_REPO" worktree add --no-checkout "$WORKTREE_PATH" -b "$BRANCH" "origin/$BRANCH"
 else
     echo "Branch '$BRANCH' does not exist — creating new branch from $BASE."
-    git -C "$MAIN_REPO" worktree add -b "$BRANCH" "$WORKTREE_PATH" "$BASE"
+    git -C "$MAIN_REPO" worktree add --no-checkout -b "$BRANCH" "$WORKTREE_PATH" "$BASE"
 fi
 
 # 5. Set up submodules via hardlinks.
 WORKTREE_ENTRY=$(basename "$WORKTREE_PATH")
 
-echo "Hardlinking submodule data..."
-cp -al "$GIT_DIR/modules" \
-       "$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules"
+# The module copy and the main checkout write disjoint paths, so run them
+# at the same time.
+echo "Checking out files and hardlinking submodule data..."
+cp -al "$GIT_DIR/modules" "$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules" &
+cp_pid=$!
+checkout_status=0
+git -C "$WORKTREE_PATH" \
+    -c checkout.workers=0 \
+    -c core.fsync=none \
+    -c gc.auto=0 \
+    checkout -q -f HEAD -- . || checkout_status=$?
+cp_status=0
+wait "$cp_pid" || cp_status=$?
+[ "$checkout_status" -eq 0 ] || die "checkout of the worktree files failed"
+[ "$cp_status" -eq 0 ] || die "copying submodule data failed"
 
-# Fix worktree pointers in submodule configs — they still reference the main repo.
-find "$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules" -name config -exec \
-    sed -i "s|worktree = .*/contrib/|worktree = $WORKTREE_PATH/contrib/|" {} +
-
-# Some submodules (e.g. contrib/boost) store core.worktree in config.worktree
-# instead of config. Fix those too.
-find "$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules" -name config.worktree -exec \
-    sed -i "s|worktree = .*/contrib/|worktree = $WORKTREE_PATH/contrib/|" {} +
-
+# Fix worktree pointers in submodule configs — they still reference the main
+# repo. Some submodules (e.g. contrib/boost) keep core.worktree in
+# config.worktree instead of config. submodule init only writes the
+# superproject config, so it runs alongside.
 echo "Registering submodules..."
-git -C "$WORKTREE_PATH" submodule init
+git -C "$WORKTREE_PATH" submodule init &
+init_pid=$!
+find "$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules" \
+    \( -name config -o -name config.worktree \) -exec \
+    sed -i "s|worktree = .*/contrib/|worktree = $WORKTREE_PATH/contrib/|" {} +
+wait "$init_pid" || die "submodule init failed"
 
 GITLINKS=$(git -C "$WORKTREE_PATH" ls-files -s |
     sed -n 's/^160000 \([0-9a-f]*\) 0\t\(.*\)$/\1 \2/p')
@@ -223,6 +236,8 @@ echo "Checking out submodules ($JOBS jobs x $CHECKOUT_WORKERS workers)..."
             -c checkout.workers="$checkout_workers" \
             -c checkout.thresholdForParallelism=100 \
             -c index.threads=true \
+            -c core.fsync=none \
+            -c gc.auto=0 \
             checkout -q -f --detach "$expected_commit"
         then
             echo "error: $submodule_path: commit $expected_commit is missing from the local module data." >&2
