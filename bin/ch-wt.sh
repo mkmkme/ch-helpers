@@ -46,7 +46,7 @@ Submodule setup never fetches; it fails if a recorded commit is missing.
 Environment:
   SUBMODULE_CHECKOUT_WORKERS  Checkout workers per submodule (default min(8, nproc)).
   SUBMODULE_JOBS              Submodules checked out at once
-                              (default nproc / SUBMODULE_CHECKOUT_WORKERS).
+                              (default 2 x nproc / SUBMODULE_CHECKOUT_WORKERS).
 EOF
 }
 
@@ -232,11 +232,12 @@ if [ "$SKIP_SUBMODULES" = false ]; then
     [ "$GITLINK_COUNT" = "$SUBMODULE_COUNT" ] \
         || die "gitlink count $GITLINK_COUNT does not match .gitmodules count $SUBMODULE_COUNT"
 
-    # nproc is the total budget, split between submodules checked out at once
-    # and checkout workers within each.
+    # Run 2 x nproc threads in total, split between submodules checked out at
+    # once and checkout workers within each. Checkouts mostly wait on the
+    # filesystem, so nproc alone leaves CPUs idle.
     CHECKOUT_WORKERS=${SUBMODULE_CHECKOUT_WORKERS:-$(( CPU_COUNT < 8 ? CPU_COUNT : 8 ))}
     [ "$CHECKOUT_WORKERS" -ge 1 ] || die "SUBMODULE_CHECKOUT_WORKERS must be positive"
-    JOBS=${SUBMODULE_JOBS:-$(( CPU_COUNT / CHECKOUT_WORKERS ))}
+    JOBS=${SUBMODULE_JOBS:-$(( 2 * CPU_COUNT / CHECKOUT_WORKERS ))}
     [ "$JOBS" -ge 1 ] || JOBS=1
     export WORKTREE_PATH MODULES_DIR SOURCE_MODULES_DIR CHECKOUT_WORKERS
 
