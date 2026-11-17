@@ -241,23 +241,29 @@ if [ "$SKIP_SUBMODULES" = false ]; then
     [ "$JOBS" -ge 1 ] || JOBS=1
     export WORKTREE_PATH MODULES_DIR SOURCE_MODULES_DIR CHECKOUT_WORKERS
 
-    # Known heavy submodules go first so they don't finish last on their own.
+    # Known heavy submodules go first, slowest first, so they don't finish
+    # last on their own. Some are slow for their file count (llvm-project,
+    # aws), others for their size in a few files (icudata, MeCab, cld2).
     echo "Checking out submodules ($JOBS jobs x $CHECKOUT_WORKERS workers)..."
     {
         for submodule_path in \
             contrib/llvm-project \
-            contrib/google-cloud-cpp \
             contrib/aws \
-            contrib/openssl \
-            contrib/icu \
-            contrib/boost \
             contrib/rust_vendor \
+            contrib/boost \
+            contrib/google-cloud-cpp \
+            contrib/icudata \
+            contrib/MeCab \
+            contrib/cld2 \
+            contrib/openssl \
+            contrib/croaring \
             contrib/sysroot \
+            contrib/icu \
+            contrib/postgres \
             contrib/grpc \
             contrib/arrow \
             contrib/curl \
             contrib/rocksdb \
-            contrib/postgres \
             contrib/wasmtime
         do
             printf '%s\n' "$GITLINKS" | awk -v p="$submodule_path" '$2 == p { print; exit }'
