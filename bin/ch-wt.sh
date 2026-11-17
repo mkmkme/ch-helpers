@@ -156,7 +156,9 @@ else
 fi
 
 # 5. Set up submodules via hardlinks.
-WORKTREE_ENTRY=$(basename "$WORKTREE_PATH")
+# Git names the worktree's admin dir after the path's basename, but adds a
+# number when that name is taken, so ask git where it is.
+WORKTREE_GIT_DIR=$(git -C "$WORKTREE_PATH" rev-parse --absolute-git-dir)
 
 # The module copy and the main checkout write disjoint paths, so run them
 # at the same time.
@@ -165,7 +167,7 @@ if [ "$SKIP_SUBMODULES" = true ]; then
     echo "Checking out files (skipping submodules)..."
 else
     echo "Checking out files and hardlinking submodule data..."
-    cp -al "$GIT_DIR/modules" "$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules" &
+    cp -al "$GIT_DIR/modules" "$WORKTREE_GIT_DIR/modules" &
     cp_pid=$!
 fi
 checkout_status=0
@@ -187,13 +189,13 @@ if [ "$SKIP_SUBMODULES" = false ]; then
     echo "Registering submodules..."
     git -C "$WORKTREE_PATH" submodule init &
     init_pid=$!
-    find "$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules" \
+    find "$WORKTREE_GIT_DIR/modules" \
         \( -name config -o -name config.worktree \) -exec \
         sed -i "s|worktree = .*/contrib/|worktree = $WORKTREE_PATH/contrib/|" {} +
     # Git appends to reflogs and rewrites FETCH_HEAD in place, so hardlinked
     # copies would leak into the main repo and every other worktree. Give
     # this worktree its own copies.
-    find "$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules" -type f \
+    find "$WORKTREE_GIT_DIR/modules" -type f \
         \( -path '*/logs/*' -o -name FETCH_HEAD \) -print0 |
         xargs -0 -r -n 32 -P "$(nproc)" sh -c 'for f; do cp -p "$f" "$f.tmp" && mv -f "$f.tmp" "$f" || exit 1; done' sh \
         || die "copying submodule reflogs failed"
@@ -269,7 +271,7 @@ if [ "$SKIP_SUBMODULES" = false ]; then
                 echo "    git -C $main_repo/$submodule_path fetch origin $expected_commit" >&2
                 exit 1
             fi
-        ' sh "$MAIN_REPO" "$WORKTREE_PATH" "$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules" "$CHECKOUT_WORKERS" \
+        ' sh "$MAIN_REPO" "$WORKTREE_PATH" "$WORKTREE_GIT_DIR/modules" "$CHECKOUT_WORKERS" \
         || die "a submodule could not be checked out at the recorded commit"
 fi
 
