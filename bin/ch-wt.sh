@@ -178,56 +178,28 @@ fi
 # number when that name is taken, so ask git where it is.
 MODULES_DIR=$(git -C "$WORKTREE_PATH" rev-parse --absolute-git-dir)/modules
 
-# 5. Check out the worktree files. Copying the submodule data writes disjoint
-# paths, so it runs at the same time.
-cp_pid=
+# 5. Check out the worktree files and, at the same time, the submodules.
+main_checkout() {
+    git -C "$WORKTREE_PATH" \
+        -c checkout.workers=0 \
+        -c core.fsync=none \
+        checkout -q -f --no-recurse-submodules HEAD -- .
+}
+
 if [ "$SKIP_SUBMODULES" = true ]; then
     echo "Checking out files (skipping submodules)..."
+    main_checkout || die "checkout of the worktree files failed"
 else
-    echo "Checking out files and hardlinking submodule data..."
-    cp -al "$SOURCE_MODULES_DIR" "$MODULES_DIR" &
-    cp_pid=$!
-fi
-checkout_status=0
-git -C "$WORKTREE_PATH" \
-    -c checkout.workers=0 \
-    -c core.fsync=none \
-    checkout -q -f HEAD -- . || checkout_status=$?
-cp_status=0
-[ -z "$cp_pid" ] || wait "$cp_pid" || cp_status=$?
-[ "$checkout_status" -eq 0 ] || die "checkout of the worktree files failed"
-[ "$cp_status" -eq 0 ] || die "copying submodule data failed"
-
-# 6. Set up submodules.
-if [ "$SKIP_SUBMODULES" = false ]; then
     CPU_COUNT=$(nproc)
     export -f unshare_files checkout_submodule
 
-    # submodule init only writes the superproject config, so it runs while
-    # the copied module data is fixed up.
-    echo "Registering submodules..."
-    git -C "$WORKTREE_PATH" submodule init &
-    init_pid=$!
-
-    # The copied configs still point core.worktree at the main repo. Some
-    # submodules (e.g. contrib/boost) keep it in config.worktree instead.
-    find "$MODULES_DIR" \( -name config -o -name config.worktree \) -exec \
-        sed -i "s|worktree = .*/contrib/|worktree = $WORKTREE_PATH/contrib/|" {} +
-
-    # Git appends to reflogs and rewrites FETCH_HEAD in place, so hardlinked
-    # copies would leak into the main repo and every other worktree.
-    find "$MODULES_DIR" -type f \( -path '*/logs/*' -o -name FETCH_HEAD \) -print0 |
-        xargs -0 -r -n 32 -P "$CPU_COUNT" bash -c 'unshare_files "$@"' _ \
-        || die "copying submodule reflogs failed"
-
-    wait "$init_pid" || die "submodule init failed"
-
-    # Submodules are checked out from the gitlinks, not from .gitmodules as
-    # git submodule does. Stop if the two disagree.
-    GITLINKS=$(git -C "$WORKTREE_PATH" ls-files -s |
-        sed -n 's/^160000 \([0-9a-f]*\) 0\t\(.*\)$/\1 \2/p')
+    # The index doesn't exist yet, so read the gitlinks and .gitmodules from
+    # the worktree's HEAD. Submodules are checked out from the gitlinks, not
+    # from .gitmodules as git submodule does. Stop if the two disagree.
+    GITLINKS=$(git -C "$WORKTREE_PATH" ls-tree -r HEAD |
+        sed -n 's/^160000 commit \([0-9a-f]*\)\t\(.*\)$/\1 \2/p')
     GITLINK_COUNT=$(printf '%s' "$GITLINKS" | grep -c '^' || true)
-    SUBMODULE_COUNT=$(git -C "$WORKTREE_PATH" config --file .gitmodules \
+    SUBMODULE_COUNT=$(git -C "$WORKTREE_PATH" config --blob HEAD:.gitmodules \
         --get-regexp '^submodule\..*\.path$' | grep -c '^' || true)
     [ "$GITLINK_COUNT" = "$SUBMODULE_COUNT" ] \
         || die "gitlink count $GITLINK_COUNT does not match .gitmodules count $SUBMODULE_COUNT"
@@ -241,42 +213,74 @@ if [ "$SKIP_SUBMODULES" = false ]; then
     [ "$JOBS" -ge 1 ] || JOBS=1
     export WORKTREE_PATH MODULES_DIR SOURCE_MODULES_DIR CHECKOUT_WORKERS
 
-    # Known heavy submodules go first, slowest first, so they don't finish
-    # last on their own. Some are slow for their file count (llvm-project,
-    # aws), others for their size in a few files (icudata, MeCab, cld2).
-    echo "Checking out submodules ($JOBS jobs x $CHECKOUT_WORKERS workers)..."
-    {
-        for submodule_path in \
-            contrib/llvm-project \
-            contrib/aws \
-            contrib/rust_vendor \
-            contrib/boost \
-            contrib/google-cloud-cpp \
-            contrib/icudata \
-            contrib/MeCab \
-            contrib/cld2 \
-            contrib/openssl \
-            contrib/croaring \
-            contrib/sysroot \
-            contrib/icu \
-            contrib/postgres \
-            contrib/grpc \
-            contrib/arrow \
-            contrib/curl \
-            contrib/rocksdb \
-            contrib/wasmtime
-        do
-            printf '%s\n' "$GITLINKS" | awk -v p="$submodule_path" '$2 == p { print; exit }'
-        done
-        printf '%s\n' "$GITLINKS"
-    } |
-        awk 'NF == 2 && !seen[$2]++' |
-        tr ' \n' '\0\0' |
-        xargs -0 -r -n 2 -P "$JOBS" bash -c 'checkout_submodule "$@"' _ \
-        || die "a submodule could not be checked out at the recorded commit"
+    # Create the submodule directories first, so the main checkout and the
+    # submodule checkouts never race to create the same one.
+    printf '%s\n' "$GITLINKS" | cut -d' ' -f2 | (cd "$WORKTREE_PATH" && xargs -r mkdir -p)
+
+    setup_submodules() {
+        cp -al "$SOURCE_MODULES_DIR" "$MODULES_DIR" \
+            || { echo "error: copying submodule data failed" >&2; return 1; }
+
+        # The copied configs still point core.worktree at the main repo. Some
+        # submodules (e.g. contrib/boost) keep it in config.worktree instead.
+        find "$MODULES_DIR" \( -name config -o -name config.worktree \) -exec \
+            sed -i "s|worktree = .*/contrib/|worktree = $WORKTREE_PATH/contrib/|" {} +
+
+        # Git appends to reflogs and rewrites FETCH_HEAD in place, so hardlinked
+        # copies would leak into the main repo and every other worktree.
+        find "$MODULES_DIR" -type f \( -path '*/logs/*' -o -name FETCH_HEAD \) -print0 |
+            xargs -0 -r -n 32 -P "$CPU_COUNT" bash -c 'unshare_files "$@"' _ \
+            || { echo "error: copying submodule reflogs failed" >&2; return 1; }
+
+        # Known heavy submodules go first, slowest first, so they don't finish
+        # last on their own. Some are slow for their file count (llvm-project,
+        # aws), others for their size in a few files (icudata, MeCab, cld2).
+        {
+            for submodule_path in \
+                contrib/llvm-project \
+                contrib/aws \
+                contrib/rust_vendor \
+                contrib/boost \
+                contrib/google-cloud-cpp \
+                contrib/icudata \
+                contrib/MeCab \
+                contrib/cld2 \
+                contrib/openssl \
+                contrib/croaring \
+                contrib/sysroot \
+                contrib/icu \
+                contrib/postgres \
+                contrib/grpc \
+                contrib/arrow \
+                contrib/curl \
+                contrib/rocksdb \
+                contrib/wasmtime
+            do
+                printf '%s\n' "$GITLINKS" | awk -v p="$submodule_path" '$2 == p { print; exit }'
+            done
+            printf '%s\n' "$GITLINKS"
+        } |
+            awk 'NF == 2 && !seen[$2]++' |
+            tr ' \n' '\0\0' |
+            xargs -0 -r -n 2 -P "$JOBS" bash -c 'checkout_submodule "$@"' _
+    }
+
+    echo "Checking out files and submodules ($JOBS jobs x $CHECKOUT_WORKERS workers)..."
+    setup_submodules &
+    submodules_pid=$!
+    main_status=0
+    main_checkout || main_status=$?
+    # submodule init reads .gitmodules from the checked-out files.
+    if [ "$main_status" -eq 0 ]; then
+        git -C "$WORKTREE_PATH" submodule init >/dev/null || main_status=$?
+    fi
+    submodules_status=0
+    wait "$submodules_pid" || submodules_status=$?
+    [ "$main_status" -eq 0 ] || die "checkout of the worktree files or submodule init failed"
+    [ "$submodules_status" -eq 0 ] || die "submodule setup failed"
 fi
 
-# 7. Report results.
+# 6. Report results.
 echo ""
 echo "Worktree created successfully."
 echo "  Source repo:  $SOURCE_REPO"
