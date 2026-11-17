@@ -253,7 +253,7 @@ if [ "$SKIP_SUBMODULES" = false ]; then
             printf '%s\0%s\0' "$expected_commit" "$submodule_path"
         done |
         xargs -0 -r -n2 -P "$JOBS" sh -c '
-            main_repo=$1 worktree_path=$2 modules_dir=$3 checkout_workers=$4
+            source_modules_dir=$1 worktree_path=$2 modules_dir=$3 checkout_workers=$4
             expected_commit=$5 submodule_path=$6
             module_git_dir="$modules_dir/$submodule_path"
             module_worktree="$worktree_path/$submodule_path"
@@ -269,11 +269,11 @@ if [ "$SKIP_SUBMODULES" = false ]; then
                 checkout -q -f --detach "$expected_commit"
             then
                 echo "error: $submodule_path: commit $expected_commit is missing from the local module data." >&2
-                echo "Fetch it into the main repo, then create the worktree again:" >&2
-                echo "    git -C $main_repo/$submodule_path fetch origin $expected_commit" >&2
+                echo "Fetch it into the module data worktrees are copied from, then create the worktree again:" >&2
+                echo "    git --git-dir=$source_modules_dir/$submodule_path fetch origin $expected_commit" >&2
                 exit 1
             fi
-        ' sh "$MAIN_REPO" "$WORKTREE_PATH" "$WORKTREE_GIT_DIR/modules" "$CHECKOUT_WORKERS" \
+        ' sh "$COMMON_DIR/modules" "$WORKTREE_PATH" "$WORKTREE_GIT_DIR/modules" "$CHECKOUT_WORKERS" \
         || die "a submodule could not be checked out at the recorded commit"
 fi
 
