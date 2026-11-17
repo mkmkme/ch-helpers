@@ -107,7 +107,11 @@ fi
 [ ! -e "$WORKTREE_PATH" ] \
     || die "worktree path already exists: $WORKTREE_PATH"
 
-GIT_DIR=$(git -C "$MAIN_REPO" rev-parse --git-common-dir)
+GIT_COMMON_DIR=$(git -C "$MAIN_REPO" rev-parse --git-common-dir)
+case "$GIT_COMMON_DIR" in
+    /*) GIT_DIR=$GIT_COMMON_DIR ;;
+    *) GIT_DIR=$MAIN_REPO/$GIT_COMMON_DIR ;;
+esac
 [ -d "$GIT_DIR/modules" ] \
     || die "no submodule data found in $GIT_DIR/modules — run 'git submodule update --init' in the main repo first"
 
