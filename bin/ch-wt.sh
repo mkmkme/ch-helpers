@@ -164,10 +164,21 @@ git -C "$WORKTREE_PATH" submodule init
 
 # Check out each submodule at the commit the superproject records, using only
 # the hardlinked module data. A missing commit fails instead of fetching.
+GITLINKS=$(git -C "$WORKTREE_PATH" ls-files -s |
+    sed -n 's/^160000 \([0-9a-f]*\) 0\t\(.*\)$/\1 \2/p')
+
+# The checkout below works from the gitlinks, not from .gitmodules as
+# git submodule does. Stop if the two disagree.
+GITLINK_COUNT=$(printf '%s' "$GITLINKS" | grep -c '^' || true)
+SUBMODULE_COUNT=$(git -C "$WORKTREE_PATH" config --file .gitmodules \
+    --get-regexp '^submodule\..*\.path$' | grep -c '^' || true)
+[ "$GITLINK_COUNT" = "$SUBMODULE_COUNT" ] \
+    || die "gitlink count $GITLINK_COUNT does not match .gitmodules count $SUBMODULE_COUNT"
+
 echo "Checking out submodules..."
-git -C "$WORKTREE_PATH" ls-files -s |
-    sed -n 's/^160000 \([0-9a-f]*\) 0\t\(.*\)$/\1 \2/p' |
+printf '%s\n' "$GITLINKS" |
     while read -r expected_commit submodule_path; do
+        [ -n "$submodule_path" ] || continue
         module_git_dir="$GIT_DIR/worktrees/$WORKTREE_ENTRY/modules/$submodule_path"
         module_worktree="$WORKTREE_PATH/$submodule_path"
         mkdir -p "$module_worktree"
