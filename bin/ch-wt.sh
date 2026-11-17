@@ -25,6 +25,12 @@
 
 set -euo pipefail
 
+# Work from the current directory only. Inherited GIT_DIR, GIT_WORK_TREE and
+# the like (e.g. when run from a hook) would point every git call below at
+# the source repo instead of the new worktree.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+
 die() { echo "error: $*" >&2; exit 1; }
 
 usage() {
@@ -119,13 +125,9 @@ fi
 [ ! -e "$WORKTREE_PATH" ] \
     || die "worktree path already exists: $WORKTREE_PATH"
 
-GIT_COMMON_DIR=$(git -C "$MAIN_REPO" rev-parse --git-common-dir)
-case "$GIT_COMMON_DIR" in
-    /*) GIT_DIR=$GIT_COMMON_DIR ;;
-    *) GIT_DIR=$MAIN_REPO/$GIT_COMMON_DIR ;;
-esac
-[ "$SKIP_SUBMODULES" = true ] || [ -d "$GIT_DIR/modules" ] \
-    || die "no submodule data found in $GIT_DIR/modules — run 'git submodule update --init' in the main repo first"
+COMMON_DIR=$(git -C "$MAIN_REPO" rev-parse --path-format=absolute --git-common-dir)
+[ "$SKIP_SUBMODULES" = true ] || [ -d "$COMMON_DIR/modules" ] \
+    || die "no submodule data found in $COMMON_DIR/modules — run 'git submodule update --init' in the main repo first"
 
 LOCAL=$(git -C "$MAIN_REPO" branch --list "$BRANCH")
 REMOTE=$(git -C "$MAIN_REPO" branch --list -r "origin/$BRANCH")
@@ -167,7 +169,7 @@ if [ "$SKIP_SUBMODULES" = true ]; then
     echo "Checking out files (skipping submodules)..."
 else
     echo "Checking out files and hardlinking submodule data..."
-    cp -al "$GIT_DIR/modules" "$WORKTREE_GIT_DIR/modules" &
+    cp -al "$COMMON_DIR/modules" "$WORKTREE_GIT_DIR/modules" &
     cp_pid=$!
 fi
 checkout_status=0
